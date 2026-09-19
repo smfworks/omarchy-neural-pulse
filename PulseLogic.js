@@ -6,7 +6,7 @@
 var SAMPLE_COUNT = 48
 var POLL_MS = 4000
 var FRAME_MS = 46
-var BUSY_WINDOW_SEC = 180
+var BUSY_WINDOW_SEC = 30
 
 function clamp(value, lo, hi) {
   return Math.max(lo, Math.min(hi, value))
@@ -17,19 +17,58 @@ function number(value) {
   return isFinite(n) ? n : 0
 }
 
+function emptyTotals() {
+  return {
+    sessionCount: 0,
+    tokens: 0,
+    active: 0
+  }
+}
+
 function demoSnapshot() {
   return {
     present: false,
     demo: true,
     busy: false,
+    error: "",
+    stale: false,
     home: "",
     sessions: [],
-    totals: {
-      sessionCount: 0,
-      tokens: 0,
-      active: 0
-    }
+    totals: emptyTotals(),
+    totalsWindow: "last 24h",
+    profileCount: 0
   }
+}
+
+function errorSnapshot(message) {
+  var snap = demoSnapshot()
+  snap.demo = false
+  snap.error = message || "probe failed"
+  return snap
+}
+
+function copySnapshot(snapshot) {
+  var next = demoSnapshot()
+  if (!snapshot || typeof snapshot !== "object")
+    return next
+  var key
+  for (key in snapshot) {
+    if (Object.prototype.hasOwnProperty.call(snapshot, key))
+      next[key] = snapshot[key]
+  }
+  if (!Array.isArray(next.sessions))
+    next.sessions = []
+  if (!next.totals || typeof next.totals !== "object")
+    next.totals = emptyTotals()
+  return next
+}
+
+function markStale(snapshot, message) {
+  var next = copySnapshot(snapshot)
+  next.stale = true
+  next.busy = false
+  next.error = message || next.error || "probe failed"
+  return next
 }
 
 function emptyBuffer() {
@@ -61,25 +100,80 @@ function pushSample(buffer, value) {
 }
 
 function parseSnapshot(text) {
+  var raw = String(text || "").trim()
+  if (raw === "")
+    return errorSnapshot("empty probe")
   try {
-    var parsed = JSON.parse(String(text || ""))
-    if (!parsed || typeof parsed !== "object" || parsed.present !== true)
-      return demoSnapshot()
-    if (!Array.isArray(parsed.sessions))
-      parsed.sessions = []
-    if (!parsed.totals || typeof parsed.totals !== "object") {
-      parsed.totals = { sessionCount: parsed.sessions.length, tokens: 0, active: 0 }
+    var parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== "object")
+      return errorSnapshot("invalid snapshot")
+    parsed = copySnapshot(parsed)
+    parsed.error = parsed.error ? String(parsed.error) : ""
+    parsed.stale = parsed.stale === true
+    parsed.busy = parsed.busy === true
+    parsed.profileCount = number(parsed.profileCount)
+    if (!parsed.totalsWindow)
+      parsed.totalsWindow = "last 24h"
+    if (parsed.error && parsed.present !== true) {
+      parsed.demo = false
+      parsed.present = false
+      parsed.busy = false
+      return parsed
+    }
+    if (parsed.present !== true) {
+      var demo = demoSnapshot()
+      demo.home = parsed.home || ""
+      return demo
     }
     parsed.demo = false
-    parsed.busy = parsed.busy === true
+    parsed.present = true
     return parsed
   } catch (e) {
-    return demoSnapshot()
+    return errorSnapshot("invalid snapshot")
   }
 }
 
+function mergeProbe(current, text) {
+  var next = parseSnapshot(text)
+  var live = current && current.present === true && current.stale !== true
+  if (next && next.present === true)
+    return next
+  if (next && next.demo === true && !next.error)
+    return next
+  if (live)
+    return markStale(current, next && next.error ? next.error : "probe failed")
+  if (current && current.stale === true && current.present === true)
+    return current
+  if (current && current.error && current.present !== true)
+    return current
+  return next && next.error ? next : errorSnapshot("probe failed")
+}
+
+function barMode(snapshot) {
+  if (!snapshot)
+    return "demo"
+  if (snapshot.stale === true)
+    return "stale"
+  if (snapshot.error)
+    return "err"
+  if (snapshot.present !== true)
+    return "demo"
+  return "live"
+}
+
+function barLabel(snapshot) {
+  var mode = barMode(snapshot)
+  if (mode === "err")
+    return "ERR"
+  if (mode === "stale")
+    return "STALE"
+  if (mode === "demo")
+    return "DEMO"
+  return ""
+}
+
 function activityFrom(snapshot) {
-  if (!snapshot || snapshot.present !== true)
+  if (!snapshot || snapshot.present !== true || snapshot.stale === true)
     return 0
   if (snapshot.busy)
     return 0.88
@@ -118,6 +212,16 @@ function sessionTokens(session) {
   ))
 }
 
+function isGhost(session) {
+  if (!session)
+    return false
+  var ended = session.endedAt
+  var open = session.active === true || ended == null || ended === ""
+  if (!open)
+    return false
+  return number(session.messageCount) <= 0 && sessionTokens(session) <= 0
+}
+
 function formatUsd(amount, estimated) {
   if (typeof amount !== "number" || !isFinite(amount) || amount <= 0)
     return ""
@@ -129,28 +233,57 @@ function formatCost(session) {
   if (!session)
     return ""
   var actual = formatUsd(session.actualCostUsd, false)
+  var estimated = formatUsd(session.estimatedCostUsd, true)
+  if (actual !== "" && estimated !== "")
+    return actual + " actual · " + estimated + " est"
   if (actual !== "")
     return actual
-  return formatUsd(session.estimatedCostUsd, true)
+  return estimated
 }
 
 function knownCostUsd(snapshot) {
   if (!snapshot || !snapshot.totals)
     return ""
   var actual = formatUsd(snapshot.totals.actualCostUsd, false)
+  var estimated = formatUsd(snapshot.totals.estimatedCostUsd, true)
+  if (actual !== "" && estimated !== "")
+    return actual + " actual · " + estimated + " est"
   if (actual !== "")
     return actual
-  return formatUsd(snapshot.totals.estimatedCostUsd, true)
+  return estimated
+}
+
+function headerTotalsLine(snapshot) {
+  if (!snapshot || snapshot.present !== true || !snapshot.totals)
+    return ""
+  var bits = []
+  var windowLabel = String(snapshot.totalsWindow || "").trim()
+  if (windowLabel !== "")
+    bits.push(windowLabel)
+  bits.push(formatTokens(snapshot.totals.tokens) + " tokens")
+  var cost = knownCostUsd(snapshot)
+  if (cost !== "")
+    bits.push(cost)
+  var count = number(snapshot.totals.sessionCount)
+  bits.push(count + " session" + (count === 1 ? "" : "s"))
+  var profiles = number(snapshot.profileCount)
+  if (profiles > 1)
+    bits.push(profiles + " profiles")
+  return bits.join(" · ")
 }
 
 function sessionStatus(session) {
   if (!session)
     return "unknown"
-  if (session.active === true || session.endedAt == null || session.endedAt === "")
+  if (isGhost(session))
+    return "ghost"
+  if (session.active === true)
     return "active"
   var reason = String(session.endReason || "").trim()
   if (reason !== "")
     return reason
+  if (session.endedAt == null || session.endedAt === "")
+    return "ended"
   return "ended"
 }
 
@@ -184,8 +317,22 @@ function sessionTitle(session) {
   return id || "Untitled session"
 }
 
+function sessionHeading(session, profileCount) {
+  var title = sessionTitle(session)
+  if (number(profileCount) > 1 && session && session.profile)
+    return "[" + String(session.profile) + "] " + title
+  return title
+}
+
 function statusLine(snapshot) {
-  if (!snapshot || snapshot.present !== true)
+  if (!snapshot)
+    return "Demo idle · ~/.hermes not found"
+  var mode = barMode(snapshot)
+  if (mode === "stale")
+    return "Stale · last probe failed"
+  if (mode === "err")
+    return "Error · " + (snapshot.error || "probe failed")
+  if (mode === "demo")
     return "Demo idle · ~/.hermes not found"
   if (snapshot.busy)
     return "Busy · Hermes activity"
@@ -196,199 +343,4 @@ function statusLine(snapshot) {
   if (count > 0)
     return "Idle · " + count + " logged session" + (count === 1 ? "" : "s")
   return "Idle · no sessions yet"
-}
-
-function probeSource() {
-  return [
-    "import json, os, sqlite3, time",
-    "from pathlib import Path",
-    "",
-    "BUSY_WINDOW = 180",
-    "",
-    "def num(value):",
-    "    try:",
-    "        n = float(value)",
-    "        return n if n > 0 else 0.0",
-    "    except (TypeError, ValueError):",
-    "        return 0.0",
-    "",
-    "def token_sum(row):",
-    "    total = 0.0",
-    "    for key in ('input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens', 'reasoning_tokens'):",
-    "        try:",
-    "            total += max(0.0, float(row[key] or 0))",
-    "        except (TypeError, ValueError):",
-    "            pass",
-    "    return int(total)",
-    "",
-    "def cost_payload(actual, estimated):",
-    "    out = {}",
-    "    a = num(actual)",
-    "    e = num(estimated)",
-    "    if a > 0:",
-    "        out['actualCostUsd'] = a",
-    "    if e > 0:",
-    "        out['estimatedCostUsd'] = e",
-    "    return out",
-    "",
-    "def columns(conn, table):",
-    "    try:",
-    "        return {str(row[1]) for row in conn.execute('PRAGMA table_info(\"%s\")' % table)}",
-    "    except sqlite3.Error:",
-    "        return set()",
-    "",
-    "def col(cols, name, fallback):",
-    "    return '\"%s\"' % name if name in cols else fallback",
-    "",
-    "def state_paths():",
-    "    home = Path(os.environ.get('HERMES_HOME') or (Path.home() / '.hermes'))",
-    "    seen = set()",
-    "    paths = []",
-    "    def add(path):",
-    "        try:",
-    "            resolved = path.resolve()",
-    "        except OSError:",
-    "            resolved = path",
-    "        if resolved in seen or not path.is_file():",
-    "            return",
-    "        seen.add(resolved)",
-    "        paths.append(path)",
-    "    add(home / 'state.db')",
-    "    add(Path.home() / '.hermes' / 'state.db')",
-    "    profiles = Path.home() / '.hermes' / 'profiles'",
-    "    if profiles.is_dir():",
-    "        for child in sorted(profiles.iterdir()):",
-    "            if child.is_dir():",
-    "                add(child / 'state.db')",
-    "    return home, paths",
-    "",
-    "def recently_active(path, now):",
-    "    for candidate in (path, Path(str(path) + '-wal')):",
-    "        try:",
-    "            if 0 <= now - candidate.stat().st_mtime <= BUSY_WINDOW:",
-    "                return True",
-    "        except OSError:",
-    "            pass",
-    "    return False",
-    "",
-    "def scan(path, now):",
-    "    sessions = []",
-    "    totals = {'sessionCount': 0, 'tokens': 0, 'active': 0}",
-    "    actual_sum = 0.0",
-    "    estimated_sum = 0.0",
-    "    busy = recently_active(path, now)",
-    "    try:",
-    "        conn = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=1.5)",
-    "    except (OSError, sqlite3.Error):",
-    "        return sessions, totals, busy, actual_sum, estimated_sum",
-    "    conn.row_factory = sqlite3.Row",
-    "    try:",
-    "        conn.execute('PRAGMA query_only = ON')",
-    "        cols = columns(conn, 'sessions')",
-    "        if not {'id', 'started_at'}.issubset(cols):",
-    "            return sessions, totals, busy, actual_sum, estimated_sum",
-    "        query = (",
-    "            'SELECT \"id\" AS id, '",
-    "            + col(cols, 'title', 'NULL') + ' AS title, '",
-    "            + col(cols, 'source', \"''\") + ' AS source, '",
-    "            + col(cols, 'model', 'NULL') + ' AS model, '",
-    "            + '\"started_at\" AS started_at, '",
-    "            + col(cols, 'ended_at', 'NULL') + ' AS ended_at, '",
-    "            + col(cols, 'end_reason', 'NULL') + ' AS end_reason, '",
-    "            + col(cols, 'input_tokens', '0') + ' AS input_tokens, '",
-    "            + col(cols, 'output_tokens', '0') + ' AS output_tokens, '",
-    "            + col(cols, 'cache_read_tokens', '0') + ' AS cache_read_tokens, '",
-    "            + col(cols, 'cache_write_tokens', '0') + ' AS cache_write_tokens, '",
-    "            + col(cols, 'reasoning_tokens', '0') + ' AS reasoning_tokens, '",
-    "            + col(cols, 'estimated_cost_usd', 'NULL') + ' AS estimated_cost_usd, '",
-    "            + col(cols, 'actual_cost_usd', 'NULL') + ' AS actual_cost_usd, '",
-    "            + col(cols, 'cost_status', 'NULL') + ' AS cost_status, '",
-    "            + col(cols, 'message_count', '0') + ' AS message_count '",
-    "            + 'FROM sessions ORDER BY started_at DESC LIMIT 24'",
-    "        )",
-    "        rows = list(conn.execute(query))",
-    "        totals['sessionCount'] = len(rows)",
-    "        try:",
-    "            totals['sessionCount'] = int(conn.execute('SELECT COUNT(*) FROM sessions').fetchone()[0] or 0)",
-    "        except sqlite3.Error:",
-    "            pass",
-    "        for row in rows[:8]:",
-    "            ended = row['ended_at']",
-    "            active = ended is None",
-    "            if active:",
-    "                busy = True",
-    "                totals['active'] += 1",
-    "            payload = {",
-    "                'id': str(row['id'] or ''),",
-    "                'title': row['title'] or '',",
-    "                'source': row['source'] or '',",
-    "                'model': row['model'] or '',",
-    "                'startedAt': float(row['started_at'] or 0),",
-    "                'endedAt': None if ended is None else float(ended),",
-    "                'endReason': row['end_reason'] or '',",
-    "                'inputTokens': int(num(row['input_tokens'])),",
-    "                'outputTokens': int(num(row['output_tokens'])),",
-    "                'cacheReadTokens': int(num(row['cache_read_tokens'])),",
-    "                'cacheWriteTokens': int(num(row['cache_write_tokens'])),",
-    "                'reasoningTokens': int(num(row['reasoning_tokens'])),",
-    "                'messageCount': int(num(row['message_count'])),",
-    "                'active': active,",
-    "            }",
-    "            payload.update(cost_payload(row['actual_cost_usd'], row['estimated_cost_usd']))",
-    "            totals['tokens'] += token_sum(row)",
-    "            actual_sum += num(row['actual_cost_usd'])",
-    "            estimated_sum += num(row['estimated_cost_usd'])",
-    "            sessions.append(payload)",
-    "        extra = rows[8:]",
-    "        for row in extra:",
-    "            if row['ended_at'] is None:",
-    "                busy = True",
-    "                totals['active'] += 1",
-    "            totals['tokens'] += token_sum(row)",
-    "            actual_sum += num(row['actual_cost_usd'])",
-    "            estimated_sum += num(row['estimated_cost_usd'])",
-    "    except sqlite3.Error:",
-    "        pass",
-    "    finally:",
-    "        conn.close()",
-    "    return sessions, totals, busy, actual_sum, estimated_sum",
-    "",
-    "home, paths = state_paths()",
-    "present = home.is_dir() or len(paths) > 0",
-    "out = {",
-    "    'present': present,",
-    "    'demo': not present,",
-    "    'busy': False,",
-    "    'home': str(home),",
-    "    'sessions': [],",
-    "    'totals': {'sessionCount': 0, 'tokens': 0, 'active': 0},",
-    "}",
-    "if not present:",
-    "    print(json.dumps(out, separators=(',', ':')))",
-    "    raise SystemExit(0)",
-    "now = time.time()",
-    "all_sessions = []",
-    "totals = {'sessionCount': 0, 'tokens': 0, 'active': 0}",
-    "actual_sum = 0.0",
-    "estimated_sum = 0.0",
-    "busy = False",
-    "for path in paths:",
-    "    sessions, part, part_busy, a, e = scan(path, now)",
-    "    all_sessions.extend(sessions)",
-    "    totals['sessionCount'] += part['sessionCount']",
-    "    totals['tokens'] += part['tokens']",
-    "    totals['active'] += part['active']",
-    "    actual_sum += a",
-    "    estimated_sum += e",
-    "    busy = busy or part_busy",
-    "all_sessions.sort(key=lambda item: item.get('startedAt') or 0, reverse=True)",
-    "out['sessions'] = all_sessions[:8]",
-    "out['busy'] = busy",
-    "out['totals'] = totals",
-    "if actual_sum > 0:",
-    "    out['totals']['actualCostUsd'] = actual_sum",
-    "if estimated_sum > 0:",
-    "    out['totals']['estimatedCostUsd'] = estimated_sum",
-    "print(json.dumps(out, separators=(',', ':')))"
-  ].join("\n")
 }
