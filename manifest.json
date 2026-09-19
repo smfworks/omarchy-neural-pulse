@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "smf.neural-pulse",
+  "name": "Neural Pulse",
+  "version": "0.1.0",
+  "author": "SMF Works",
+  "license": "MIT",
+  "description": "Futuristic Omarchy bar widget: a glowing neural waveform of Hermes agent activity, with a holographic session strip for tokens, status, and cost when Hermes recorded it.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Neural Pulse",
+    "description": "Neural waveform of Hermes activity and a nested session strip.",
+    "category": "AI",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
