@@ -12,7 +12,7 @@ Plugin id: `smf.neural-pulse`. Adversarial review of whether the pulse/strip is 
 
 Neural Pulse on Omarchy (mikesai6) — bar waveform plus the session strip panel.
 
-[demo.mp4](docs/demo.mp4)
+https://github.com/smfworks/omarchy-neural-pulse/releases/download/demo/demo.mp4
 
 ## Requirements
 
