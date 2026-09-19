@@ -14,18 +14,25 @@ Panel {
   property var hostWidget: null
   property var snapshot: Pulse.demoSnapshot()
   property var sessions: []
-  property bool processRunning: false
 
-  readonly property bool busy: processRunning || (snapshot && snapshot.busy === true)
+  readonly property string probeScript: {
+    var u = Qt.resolvedUrl("probe.py").toString()
+    if (u.indexOf("file://") === 0)
+      return decodeURIComponent(u.substring(7))
+    return u
+  }
+  readonly property bool busy: snapshot && snapshot.busy === true && snapshot.stale !== true
   readonly property bool hermesPresent: snapshot && snapshot.present === true
-  readonly property bool demo: !hermesPresent
+  readonly property bool demo: Pulse.barMode(snapshot) === "demo"
+  readonly property string barLabel: Pulse.barLabel(snapshot)
   readonly property real activity: Pulse.activityFrom(snapshot)
   readonly property string statusLine: Pulse.statusLine(snapshot)
   readonly property string costLine: Pulse.knownCostUsd(snapshot)
+  readonly property string totalsLine: Pulse.headerTotalsLine(snapshot)
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color dim: Qt.darker(foreground, 1.55)
-  readonly property color pulseCyan: Qt.tint(foreground, "#7300E8FF")
-  readonly property color pulseMagenta: Qt.tint(bar && bar.urgent ? bar.urgent : Color.urgent, "#73FF40B4")
+  readonly property color pulseCyan: Color.accent
+  readonly property color pulseMagenta: (bar && bar.urgent) ? bar.urgent : Color.urgent
   readonly property color glass: Color.popups && Color.popups.background ? Color.popups.background : Color.background
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
@@ -57,15 +64,15 @@ Panel {
   }
 
   function refresh() {
-    if (probe.running) probe.running = false
+    if (probe.running)
+      return
     probe.running = true
-    if (!desktopProbe.running) desktopProbe.running = true
   }
 
   function applyProbe(text) {
-    var next = Pulse.parseSnapshot(text)
+    var next = Pulse.mergeProbe(root.snapshot, text)
     root.snapshot = next
-    root.sessions = next.sessions || []
+    root.sessions = next && next.present === true ? (next.sessions || []) : []
   }
 
   function glassFill(alpha) {
@@ -78,22 +85,15 @@ Panel {
 
   Process {
     id: probe
-    command: ["python3", "-c", Pulse.probeSource()]
+    command: ["python3", root.probeScript]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.applyProbe(text)
     }
     onExited: function(code) {
-      if (code !== 0 && (!root.snapshot || root.snapshot.present !== true))
+      if (code !== 0)
         root.applyProbe("")
     }
-  }
-
-  Process {
-    id: desktopProbe
-    command: ["pgrep", "-x", "hermes"]
-    stdout: StdioCollector { waitForEnd: true }
-    onExited: function(code) { root.processRunning = code === 0 }
   }
 
   Timer {
@@ -172,16 +172,8 @@ Panel {
             Text {
               width: parent.width
               wrapMode: Text.WordWrap
-              visible: root.hermesPresent
-              text: {
-                var bits = []
-                var totals = root.snapshot && root.snapshot.totals ? root.snapshot.totals : {}
-                bits.push(Pulse.formatTokens(totals.tokens) + " tokens")
-                var cost = root.costLine
-                if (cost !== "") bits.push("logged " + cost)
-                bits.push((totals.sessionCount || 0) + " sessions")
-                return bits.join(" · ")
-              }
+              visible: root.hermesPresent && root.totalsLine !== ""
+              text: root.totalsLine
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -193,7 +185,7 @@ Panel {
           width: parent.width - Style.space(32)
           visible: root.demo
           wrapMode: Text.WordWrap
-          text: "Idle demo. Neural Pulse reads ~/.hermes/state.db (and named profiles) when Hermes is installed. USD is shown only when Hermes stored a cost."
+          text: "Idle demo. The bar shows DEMO until Neural Pulse can open ~/.hermes/state.db (and named profiles). USD is shown only when Hermes stored a cost."
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
@@ -237,7 +229,7 @@ Panel {
                 Text {
                   width: parent.width - metaLabel.implicitWidth - Style.space(8)
                   elide: Text.ElideRight
-                  text: Pulse.sessionTitle(modelData)
+                  text: Pulse.sessionHeading(modelData, root.snapshot && root.snapshot.profileCount)
                   color: root.foreground
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.subtitle
@@ -265,8 +257,12 @@ Panel {
                   var bits = [Pulse.sessionStatus(modelData)]
                   if (modelData && modelData.model) bits.push(String(modelData.model))
                   if (modelData && modelData.source) bits.push(String(modelData.source))
-                  var ago = Pulse.relativeTime(modelData && modelData.startedAt)
-                  if (ago !== "") bits.push(ago)
+                  if (root.snapshot && root.snapshot.profileCount > 1 && modelData && modelData.profile)
+                    bits.push(String(modelData.profile))
+                  var when = modelData && modelData.lastActivityAt ? modelData.lastActivityAt : (modelData && modelData.startedAt)
+                  var ago = Pulse.relativeTime(when)
+                  if (modelData && modelData.active) bits.push("running")
+                  else if (ago !== "") bits.push(ago)
                   return bits.join(" · ")
                 }
                 color: root.dim

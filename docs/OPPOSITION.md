@@ -2,7 +2,11 @@
 
 Adversarial review of `smf.neural-pulse` (Omarchy Quattro `bar-widget`).
 Scope: `BarWidget.qml`, `Panel.qml`, `PulseLogic.js`, `manifest.json`, `README.md`.
-**No product tests exist** — no `tests/`, no `qmltestrunner` targets, no extracted probe module. `PulseLogic.js` is a `.pragma library` of pure helpers plus a stringly-typed Python blob (`probeSource()`); none of it is executed in CI.
+**At review time, no product tests existed** — no `tests/`, no `qmltestrunner` targets, no extracted probe module. `PulseLogic.js` was a `.pragma library` of pure helpers plus a stringly-typed Python blob (`probeSource()`); none of it ran in CI.
+
+## Addressed in honest-pulse
+
+The follow-up product PR (`Honest pulse: stop false busy, label demo/error, match totals`) changes the trust contract this review asked for: busy is a ~30s recency window on `last_activity_at` / messages / non-ghost rows (no `pgrep -x`, no WAL mtime); the bar paints **DEMO** / **ERR** / **STALE**; header tokens/USD/counts share the labeled last-24h SQL population and keep actual+estimated; `present` requires an opened `state.db`; multi-profile rows are badged; fixture tests cover demo vs live, ghosts, quiet, totals, and unreadable DBs. Remaining P1/P2 items (inotify, Canvas fps, profile ACL lockdown) are still open. The analysis below is the pre-fix evidence.
 
 Method: assume a user screenshots the bar waveform and the session strip and believes them. Argue against that trust. Example inputs are concrete.
 

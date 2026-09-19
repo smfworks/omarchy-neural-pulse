@@ -17,9 +17,14 @@ BarWidget {
   readonly property string pulseTooltip: panelLoader.item && panelLoader.item.statusLine
     ? panelLoader.item.statusLine
     : "Neural Pulse"
+  readonly property string pulseBarLabel: panelLoader.item ? String(panelLoader.item.barLabel || "") : "DEMO"
+  readonly property bool pulseMuted: pulseBarLabel !== ""
 
-  readonly property color pulseCyan: Qt.tint(bar ? bar.foreground : Color.accent, "#7300E8FF")
-  readonly property color pulseMagenta: Qt.tint(bar ? (bar.urgent || bar.foreground) : Color.urgent, "#73FF40B4")
+  readonly property color pulseCyan: Color.accent
+  readonly property color pulseMagenta: (bar && bar.urgent) ? bar.urgent : Color.urgent
+  readonly property color pulseForeground: bar ? bar.foreground : Color.foreground
+  readonly property color wavePrimary: pulseMuted ? pulseForeground : pulseCyan
+  readonly property color waveSecondary: pulseMuted ? pulseForeground : pulseMagenta
 
   property var samples: Pulse.emptyBuffer()
 
@@ -73,6 +78,10 @@ BarWidget {
     var values = root.samples && root.samples.length ? root.samples : Pulse.emptyBuffer()
     var last = values.length - 1
     if (last < 1) return
+    var glow = root.pulseMuted ? 0.08 : 0.16
+    var mid = root.pulseMuted ? 0.12 : 0.22
+    var edge = root.pulseMuted ? 0.35 : 0.7
+    var core = root.pulseMuted ? 0.45 : 0.95
 
     function strokeWave(offset, color, width, alpha, phase) {
       ctx.beginPath()
@@ -97,10 +106,10 @@ BarWidget {
       ctx.stroke()
     }
 
-    strokeWave(0.08, root.pulseMagenta, 7.5, 0.16, 0.18)
-    strokeWave(0.0, root.pulseCyan, 5.5, 0.22, 0.0)
-    strokeWave(0.06, root.pulseMagenta, 2.4, 0.7, 0.18)
-    strokeWave(0.0, root.pulseCyan, 1.35, 0.95, 0.0)
+    strokeWave(0.08, root.waveSecondary, 7.5, glow, 0.18)
+    strokeWave(0.0, root.wavePrimary, 5.5, mid, 0.0)
+    strokeWave(0.06, root.waveSecondary, 2.4, edge, 0.18)
+    strokeWave(0.0, root.wavePrimary, 1.35, core, 0.0)
   }
 
   implicitWidth: button.implicitWidth
@@ -152,7 +161,7 @@ BarWidget {
 
     Canvas {
       id: wave
-      z: -1
+      z: 1
       anchors.fill: parent
       anchors.leftMargin: Style.spaceReal(6)
       anchors.rightMargin: Style.spaceReal(6)
@@ -160,6 +169,18 @@ BarWidget {
       anchors.bottomMargin: Style.spaceReal(4)
       renderStrategy: Canvas.Cooperative
       onPaint: root.paintWave(wave)
+    }
+
+    Text {
+      z: 2
+      anchors.centerIn: parent
+      visible: root.pulseBarLabel !== ""
+      text: root.pulseBarLabel
+      color: root.pulseForeground
+      font.family: bar ? bar.fontFamily : Style.font.family
+      font.pixelSize: Style.font.caption
+      font.bold: true
+      font.letterSpacing: 1.2
     }
   }
 
