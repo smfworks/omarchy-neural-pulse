@@ -267,3 +267,38 @@ That single PR makes a screenshot of the bar and strip *disprovable*. Visual pol
 - **MIT** `LICENSE` and `manifest.json` metadata are in place.
 
 None of that makes the pulse screenshot-safe. It means the next PR can stay small: honest busy, honest totals, visible failure, tests.
+
+---
+
+## 8. Round 2 — recheck after honest-pulse (`c82e0c2`)
+
+LIGHT recheck of current `main` only. Same method: assume a screenshot of the bar waveform and the session strip is believed. Scope now also includes shipped `probe.py` and `tests/`. No UI churn in this revision.
+
+**Verdict: no material P0 remains.** The honest-pulse contract holds on `c82e0c2`. A screenshot is disprovable. Residual risk below is P1/P2 — caption nicks, poll lag, and the still-open isolation/perf items from §3–4. Not false-busy, not unlabeled demo, not mismatched lifetime totals.
+
+### Closed (original P0s, re-argued against current code)
+
+| Item | Why it is closed |
+| --- | --- |
+| **P0-1** waveform busy while idle | `Panel.qml` `busy` is `snapshot.busy === true && snapshot.stale !== true`. No `desktopProbe` / `pgrep`. `probe.py` busy is `recency_of(last_activity_at, message MAX(timestamp), started_at) >= now - 30` on non-ghost rows. WAL/`state.db` mtime is unread (`test_busy_from_recency_not_mtime` utimes the file into the future; still recency-only). Ghost open stubs (`ended_at IS NULL`, no messages, no tokens) are dropped (`test_ghost_open_stub_is_filtered_and_not_busy`). Quiet open row at 45s is not busy (`test_busy_false_after_quiet`). `sampleAt` still ignores `activity` when `!busy`, so an open-but-quiet strip cannot drive the high-amplitude stroke. |
+| **P0-2** strip lies about tokens / cost / status | `headerTotalsLine` prefixes `totalsWindow` (`last 24h`). Tokens, USD, and `sessionCount` are `_sum_window(window_rows)` — the same last-24h, non-archived, non-ghost population (`test_totals_match_last_24h_population_not_lifetime`: 100 old rows + 2 recent → `sessionCount == 2`, tokens 150, both `$0.01` actual and `~$0.75` est). `knownCostUsd` no longer drops estimated once any actual exists. Archived rows are skipped. Live turns caption `running` from `active`, not only `relativeTime(startedAt)`. |
+| **P0-3** silent empty vs unread homes | `present` requires an opened `state.db` (`state_paths` only adds existing files; empty dir → `demo_snapshot`). Unreadable / non-SQLite / `chmod 0` / missing `id`+`started_at` → `error_snapshot` (`present: false`, `demo: false`, `error` set). `parseSnapshot("")` / invalid JSON → `errorSnapshot`. `mergeProbe` marks a prior live snapshot `STALE` instead of silently keeping yesterday or collapsing to demo. Bar face paints `DEMO` / `ERR` / `STALE` (`barLabel`); unmarked only when `barMode === "live"`. |
+| **P0-4** unlabeled multi-profile mix | Still a **union** of `$HERMES_HOME` + `~/.hermes` + `profiles/*/state.db` (ACL lockdown not shipped — remains P1). No longer a silent lie: `profile` is selected, rows are `[work] …` when `profileCount > 1`, header appends `N profiles`, README says named profiles are aggregated. |
+
+Quick wins §5.1–5.9 are landed (bar glyph, no pgrep, no mtime, matched last-24h caption, actual+est, probe errors, `present` = opened db, README python3/demo/profiles, JS + fixture tests). §5.10 (Canvas `z`) also shipped. `probeSource()` was extracted to `probe.py` (was P2).
+
+### Residual risk (argued — not P0)
+
+These are real nicks. They do not restore the old screenshot-indistinguishable mood light.
+
+1. **Status vs list population (P1).** Display list is all-time top 8 by `lastActivityAt`. Totals are last 24h. Fixture: one ended row at `now - 3d` → `sessions = [that row]`, `totals.sessionCount = 0`. `statusLine` then returns `Idle · no sessions yet` while the strip shows “Yesterday chat” and the header honestly says `last 24h · 0 tokens · 0 sessions`. Internally inconsistent, but the labeled totals are not a lifetime lie. Closest remaining honesty nick; not a P0 because the waveform is idle, the bar is unmarked-live, and the 24h line is correct.
+
+2. **Open-but-quiet still reads “running” (P1).** `active = ended is None` is still the row flag. A quiet open session (45s since last activity) is `busy: false` (wave = idle breath, status `1 live session`) but the row keeps the magenta chip and captions `running` instead of `45s ago`. Dirty `ended_at = ''` parses as `None` → `active: true` (blank-end fixture: listed, `busy: false`, `totals.active == 1`). Waveform contract holds; the chip is leftover “open row = live” language.
+
+3. **Partial profile failure is silent on the bar (P1).** If default `state.db` opens and `profiles/work/state.db` is garbage, snapshot is `present: true`, `error: ""`, `warning: "unreadable state.db (DatabaseError)"`, `profileCount: 1`. QML never reads `warning`. Bar stays unmarked. Completeness lie (kids/work omitted), not a false-busy or demo/live swap. Full-home failure still `ERR`.
+
+4. **Poll is still cold on the truth (P1).** `POLL_MS = 4000`, no inotify/WAL watch. Sub-4s CLI turns can be quiet while running; there is no mtime overcorrection anymore. `refresh()` no longer kills a live probe (torn-JSON→demo path is closed) but a hung `python3` stalls updates until it exits.
+
+5. **Still-open P1/P2 from §3–4 (unchanged, not trust-breakers).** Canvas `FRAME_MS = 46` always running; theme neon on the panel (bar now uses `Color.accent` / `bar.urgent`); `HERMES_HOME` does not lock to one profile; symlinks followed; `HERMES_HOME` not constrained to `$HOME`; `formatUsd(0.00001)` → `$0.0000`; `activityFrom` unused when idle; `last_read_at` unread; no `preview.png`; `closeForPopoutSwitch` still inherited; probe env is the shell process.
+
+No product fix in this PR. Next ship, if any, is optional P1 caption work (`statusLine` when the list is older than the totals window; show `warning`; caption quiet-open with age). Do not restyle the hologram.
