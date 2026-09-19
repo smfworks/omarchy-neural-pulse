@@ -5,7 +5,7 @@ neural waveform of Hermes agent activity. Click it for a holographic session
 strip: recent Hermes sessions, tokens, status, and cost **only when Hermes
 stored one**.
 
-Plugin id: `smf.neural-pulse`
+Plugin id: `smf.neural-pulse`. Adversarial review of whether the pulse/strip is screenshot-trustworthy: [docs/OPPOSITION.md](docs/OPPOSITION.md).
 
 ## Install
 
