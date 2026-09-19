@@ -7,6 +7,13 @@ stored one**.
 
 Plugin id: `smf.neural-pulse`. Adversarial review of whether the pulse/strip is screenshot-trustworthy: [docs/OPPOSITION.md](docs/OPPOSITION.md).
 
+
+## Demo
+
+Neural Pulse on Omarchy (mikesai6) — bar waveform plus the session strip panel.
+
+[demo.mp4](docs/demo.mp4)
+
 ## Requirements
 
 - **python3** — the widget probes Hermes `state.db` with `probe.py` every 4s.
