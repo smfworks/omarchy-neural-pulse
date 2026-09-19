@@ -232,7 +232,7 @@ def test_unreadable_db_is_error(tmp_path):
     assert snap["present"] is False
     assert snap["demo"] is False
     assert snap["error"]
-    assert "unreadable" in snap["error"] or "failed" in snap["error"]
+    assert "unreadable" in snap["error"]
 
 
 def test_chmod_zero_db_is_error(tmp_path):

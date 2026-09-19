@@ -71,6 +71,8 @@ python3 -m pytest tests
 node tests/test_pulse_logic.js
 ```
 
+`pytest` is a test-only dependency (`pip install pytest`).
+
 ## Contract
 
 - `schemaVersion: 1`, id `smf.neural-pulse` (not `omarchy.*`)

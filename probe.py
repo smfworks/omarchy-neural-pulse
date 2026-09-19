@@ -176,6 +176,10 @@ def error_snapshot(message, home=""):
 
 
 def _open_readonly(path):
+    with open(path, "rb") as handle:
+        header = handle.read(16)
+    if not header.startswith(b"SQLite format 3"):
+        raise sqlite3.DatabaseError("not a sqlite database")
     uri = Path(path).resolve().as_uri() + "?mode=ro"
     conn = sqlite3.connect(uri, uri=True, timeout=1.5)
     conn.row_factory = sqlite3.Row
